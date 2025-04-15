@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>マインスイーパー</title>
+  <style>
+    /* リセットと基本スタイル */
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    body {
+      font-family: Arial, sans-serif;
+      background-color: #f4f4f4;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+    }
+    .game-container {
+      width: 90%;
+      max-width: 400px;
+    }
+    /* ツールバーのスタイル */
+    .toolbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+    button {
+      padding: 5px 10px;
+      font-size: 16px;
+      cursor: pointer;
+    }
+    #status {
+      font-size: 16px;
+      margin-left: 10px;
+    }
+    /* ゲームボード全体 */
+    #board {
+      display: grid;
+      gap: 2px;
+      background-color: #333;
+    }
+    /* 各セルのスタイル（正方形にするため、padding-bottomで比率を固定） */
+    .cell {
+      background-color: #bbb;
+      border: none;
+      padding: 0;
+      width: 100%;
+      height: 0;
+      padding-bottom: 100%; /* 正方形 */
+      position: relative;
+      font-size: 1em;
+      user-select: none;
+    }
+    /* 開いたセル */
+    .cell.revealed {
+      background-color: #e0e0e0;
+    }
+    /* フラグを立てたセル */
+    .cell.flagged {
+      background-color: #ffd700;
+    }
+    /* 爆弾のセル */
+    .cell.mine {
+      background-color: #ff4d4d;
+    }
+    /* セル内コンテンツの位置調整 */
+    .cell span {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      font-weight: bold;
+    }
+  </style>
+</head>
+<body>
+  <div class="game-container">
+    <!-- ゲーム上部のツールバー：モード切替＆リセット -->
+    <div class="toolbar">
+      <button id="toggle-mode">Reveal Mode</button>
+      <button id="reset-game">Reset</button>
+      <span id="status">Playing</span>
+    </div>
+    <!-- ゲームボード -->
+    <div id="board"></div>
+  </div>
+
+  <script>
+    // ボードの基本設定：行数、列数、地雷数
+    const ROWS = 10;
+    const COLS = 10;
+    const MINES_COUNT = 15;
+
+    let board = [];              // 2次元配列で各セルの状態を管理
+    let minePositions = [];      // 地雷の位置を保持
+    let gameOver = false;
+    let modeFlag = false;        // false: セルを開く（Reveal Mode）、true: フラグを立てる（Flag Mode）
+    let cellsRemaining = ROWS * COLS - MINES_COUNT; // 地雷以外のセルの残り数
+
+    const boardElement = document.getElementById("board");
+    const toggleModeBtn = document.getElementById("toggle-mode");
+    const resetGameBtn = document.getElementById("reset-game");
+    const statusText = document.getElementById("status");
+
+    // ゲームボードのグリッド列数を設定
+    boardElement.style.gridTemplateColumns = `repeat(${COLS}, 1fr)`;
+
+    // セルオブジェクトのコンストラクタ
+    function Cell(row, col) {
+      this.row = row;
+      this.col = col;
+      this.isMine = false;
+      this.revealed = false;
+      this.flagged = false;
+      this.adjacentMines = 0;
+      this.element = null;  // 対応するDOM要素
+    }
+
+    // ゲーム初期化（ボード生成、地雷配置、DOM生成）
+    function initGame() {
+      board = [];
+      minePositions = [];
+      gameOver = false;
+      cellsRemaining = ROWS * COLS - MINES_COUNT;
+      statusText.textContent = "Playing";
+      boardElement.innerHTML = '';
+
+      // セルのオブジェクトを生成し、DOM要素として配置
+      for (let row = 0; row < ROWS; row++) {
+        board[row] = [];
+        for (let col = 0; col < COLS; col++) {
+          let cell = new Cell(row, col);
+          board[row][col] = cell;
+          let cellElement = document.createElement("button");
+          cellElement.classList.add("cell");
+          cellElement.setAttribute("data-row", row);
+          cellElement.setAttribute("data-col", col);
+          cellElement.style.touchAction = "manipulation"; // モバイル端末でのダブルタップズーム防止
+          boardElement.appendChild(cellElement);
+          cell.element = cellElement;
+
+          // 左クリック/tap時の処理
+          cellElement.addEventListener("click", onCellClick);
+          // 右クリック時の処理（PC向け）
+          cellElement.addEventListener("contextmenu", onCellRightClick);
+        }
+      }
+
+      // 地雷をランダムに配置
+      let minesPlaced = 0;
+      while (minesPlaced < MINES_COUNT) {
+        let r = Math.floor(Math.random() * ROWS);
+        let c = Math.floor(Math.random() * COLS);
+        if (!board[r][c].isMine) {
+          board[r][c].isMine = true;
+          minePositions.push({ row: r, col: c });
+          minesPlaced++;
+        }
+      }
+
+      // 各セルに隣接する地雷数を算出
+      for (let row = 0; row < ROWS; row++) {
+        for (let col = 0; col < COLS; col++) {
+          // 地雷でない場合のみカウント
+          if (!board[row][col].isMine) {
+            board[row][col].adjacentMines = countAdjacentMines(row, col);
+          }
+        }
+      }
+    }
+
+    // 指定したセル周辺にある地雷数を数える
+    function countAdjacentMines(row, col) {
+      let count = 0;
+      for (let r = row - 1; r <= row + 1; r++) {
+        for (let c = col - 1; c <= col + 1; c++) {
+          if (r >= 0 && r < ROWS && c >= 0 && c < COLS) {
+            if (board[r][c].isMine) count++;
+          }
+        }
+      }
+      return count;
+    }
+
+    // セルクリック時のハンドラ（モードにより動作が変わる）
+    function onCellClick(e) {
+      if (gameOver) return;
+      const cellElement = e.currentTarget;
+      const row = parseInt(cellElement.getAttribute("data-row"));
+      const col = parseInt(cellElement.getAttribute("data-col"));
+      const cell = board[row][col];
+      if (modeFlag) {
+        toggleFlag(cell);
+      } else {
+        revealCell(cell);
+      }
+    }
+
+    // 右クリック時のハンドラ：常にフラグ切替
+    function onCellRightClick(e) {
+      e.preventDefault(); // コンテキストメニューを防ぐ
+      if (gameOver) return;
+      const cellElement = e.currentTarget;
+      const row = parseInt(cellElement.getAttribute("data-row"));
+      const col = parseInt(cellElement.getAttribute("data-col"));
+      const cell = board[row][col];
+      toggleFlag(cell);
+    }
+
+    // セルのフラグをON/OFFする
+    function toggleFlag(cell) {
+      if (cell.revealed) return;
+      cell.flagged = !cell.flagged;
+      if (cell.flagged) {
+        cell.element.classList.add("flagged");
+        cell.element.innerHTML = `<span>🚩</span>`;
+      } else {
+        cell.element.classList.remove("flagged");
+        cell.element.innerHTML = "";
+      }
+    }
+
+    // セルを開く処理（爆弾ならゲームオーバー、空セルなら周辺も探索）
+    function revealCell(cell) {
+      if (cell.revealed || cell.flagged) return;
+      cell.revealed = true;
+      cell.element.classList.add("revealed");
+
+      if (cell.isMine) {
+        // 地雷なら爆発表示して終了
+        cell.element.classList.add("mine");
+        cell.element.innerHTML = `<span>💣</span>`;
+        gameOver = true;
+        statusText.textContent = "Game Over!";
+        revealAllMines();
+      } else {
+        // 数字がある場合は表示
+        if (cell.adjacentMines > 0) {
+          cell.element.innerHTML = `<span>${cell.adjacentMines}</span>`;
+        }
+        cellsRemaining--;
+        if (cellsRemaining === 0) {
+          gameOver = true;
+          statusText.textContent = "You Win!";
+          // ゲームクリア時、残る地雷も表示
+          revealAllMines(true);
+        }
+        // 隣接するセルが0の場合は周囲も自動で開く
+        if (cell.adjacentMines === 0) {
+          revealAdjacentCells(cell);
+        }
+      }
+    }
+
+    // 指定セルの周辺8方向のセルを再帰的に開く（フラッドフィル探索）
+    function revealAdjacentCells(cell) {
+      for (let r = cell.row - 1; r <= cell.row + 1; r++) {
+        for (let c = cell.col - 1; c <= cell.col + 1; c++) {
+          if (r >= 0 && r < ROWS && c >= 0 && c < COLS) {
+            let neighbor = board[r][c];
+            if (!neighbor.revealed && !neighbor.isMine) {
+              revealCell(neighbor);
+            }
+          }
+        }
+      }
+    }
+
+    // 全ての地雷を表示する（ゲームオーバーまたはクリア時）
+    function revealAllMines(showFlag = false) {
+      for (let pos of minePositions) {
+        let cell = board[pos.row][pos.col];
+        if (!cell.revealed) {
+          cell.revealed = true;
+          cell.element.classList.add("revealed", "mine");
+          cell.element.innerHTML = `<span>💣</span>`;
+        }
+      }
+    }
+
+    // モード（Reveal/Flag）の切替
+    toggleModeBtn.addEventListener("click", () => {
+      modeFlag = !modeFlag;
+      toggleModeBtn.textContent = modeFlag ? "Flag Mode" : "Reveal Mode";
+    });
+
+    // リセットボタンでゲーム再スタート
+    resetGameBtn.addEventListener("click", () => {
+      initGame();
+    });
+
+    // ページ読み込み時にゲーム開始
+    initGame();
+  </script>
+</body>
+</html>
